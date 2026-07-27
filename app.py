@@ -38,7 +38,11 @@ else:
 
 # ---------- Add this here ----------
 
-boreholes = sorted(df["borehole_id"].dropna().unique())
+boreholes = df["borehole_id"].dropna().astype(str).unique().tolist()
+boreholes = sorted(
+    boreholes,
+    key=lambda b: int(re.search(r"\d+", b).group()) if re.search(r"\d+", b) else 0,
+)
 
 selected_boreholes = st.sidebar.multiselect(
     "Select Boreholes",
