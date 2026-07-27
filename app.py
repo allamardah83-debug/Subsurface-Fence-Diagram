@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from pathlib import Path
+import re
 
 from fence_diagram import fig_to_png_bytes, intervals_to_elevation, plot_fence_diagram, read_table
 SAMPLE_FILE = Path(__file__).with_name("sample_data.xlsx")
@@ -33,6 +34,22 @@ elif use_sample:
 else:
     st.info("Upload a CSV or Excel file, or check 'Use sample data'.")
     st.stop()
+
+
+# ---------- Add this here ----------
+
+boreholes = sorted(df["borehole_id"].dropna().unique())
+
+selected_boreholes = st.sidebar.multiselect(
+    "Select Boreholes",
+    options=boreholes,
+    default=boreholes[:10],   # Show first 10 initially
+)
+
+df = df[df["borehole_id"].isin(selected_boreholes)]
+
+# ---------- End ----------
+
 
 st.subheader("Input table preview")
 st.dataframe(df.head(60), use_container_width=True)
