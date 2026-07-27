@@ -193,17 +193,20 @@ def read_table(uploaded) -> pd.DataFrame:
 
     name = getattr(uploaded, "name", "") or ""
     lower = name.lower()
+
     if lower.endswith(".csv"):
         df = pd.read_csv(uploaded)
- elif lower.endswith(".xls") or lower.endswith(".xlsx"):
-    try:
-        df = pd.read_excel(
-            uploaded,
-            sheet_name="Input_Data",
-            header=3,
-        )
-    except Exception:
-        df = pd.read_excel(uploaded)
+
+    elif lower.endswith(".xls") or lower.endswith(".xlsx"):
+        try:
+            df = pd.read_excel(
+                uploaded,
+                sheet_name="Input_Data",
+                header=3,
+            )
+        except Exception:
+            df = pd.read_excel(uploaded)
+
     else:
         try:
             df = pd.read_csv(uploaded)
@@ -211,8 +214,10 @@ def read_table(uploaded) -> pd.DataFrame:
             df = pd.read_excel(uploaded)
 
     df = intervals_to_elevation(df)
+
     if "borehole_id" not in df.columns or df["borehole_id"].isna().all():
         raise ValueError("The uploaded file must contain a 'borehole_id' column.")
+
     return df
 
 
