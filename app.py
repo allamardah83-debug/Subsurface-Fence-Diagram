@@ -1,11 +1,9 @@
-import tempfile
-from pathlib import Path
+from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
 from fence_diagram import SAMPLE_DATA, fig_to_png_bytes, intervals_to_elevation, plot_fence_diagram, read_table
-
 
 st.set_page_config(page_title="Subsurface Fence Diagram", layout="wide")
 st.title("Subsurface Fence Diagram Generator")
@@ -34,7 +32,7 @@ else:
     st.stop()
 
 st.subheader("Input table preview")
-st.dataframe(df.head(50), use_container_width=True)
+st.dataframe(df.head(60), use_container_width=True)
 
 required_cols = ["borehole_id"]
 missing = [c for c in required_cols if c not in df.columns]
@@ -48,7 +46,6 @@ except Exception as exc:
     st.error(str(exc))
     st.stop()
 
-# Helpful guidance for users.
 with st.expander("Expected columns", expanded=False):
     st.markdown(
         """
@@ -57,11 +54,11 @@ with st.expander("Expected columns", expanded=False):
         - `borehole_id, ground_elev, top_depth, bottom_depth, unit`
         - `borehole_id, top_elev, bottom_elev, unit`
 
-        Optional columns: `x`, `y`, `station`, `order`, `water_elev`, `water_depth`, `n_value`, `rqd`.
+        Optional columns: `x`, `y`, `water_elev`, `water_depth`, `n_value`, `recovery`, `rqd`, `uscs`, `description`, `formation`, `rock_type`.
         """
     )
 
-left, right = st.columns([2, 1])
+left, right = st.columns([2.2, 1])
 with left:
     try:
         fig = plot_fence_diagram(
@@ -96,6 +93,10 @@ with right:
         checks.append("Water level data detected.")
     if "n_value" in df.columns:
         checks.append("SPT N-values detected.")
+    if "recovery" in df.columns:
+        checks.append("Core recovery detected.")
+    if "rqd" in df.columns:
+        checks.append("RQD detected.")
     if "x" in df.columns or "station" in df.columns:
         checks.append("Coordinate/station data detected.")
     if checks:
@@ -105,4 +106,4 @@ with right:
         st.write("No optional fields detected.")
 
 st.divider()
-st.markdown("Created for Streamlit + GitHub deployment.")
+st.markdown("Built for Streamlit + GitHub deployment.")
