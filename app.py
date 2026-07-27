@@ -3,7 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from fence_diagram import SAMPLE_DATA, fig_to_png_bytes, intervals_to_elevation, plot_fence_diagram, read_table
+from pathlib import Path
+
+from fence_diagram import fig_to_png_bytes, intervals_to_elevation, plot_fence_diagram, read_table
+SAMPLE_FILE = Path(__file__).with_name("sample_data.xlsx")
 
 st.set_page_config(page_title="Subsurface Fence Diagram", layout="wide")
 st.title("Subsurface Fence Diagram Generator")
@@ -26,7 +29,7 @@ if uploaded is not None:
         st.error(f"Could not read file: {exc}")
         st.stop()
 elif use_sample:
-    df = SAMPLE_DATA.copy()
+    df = read_table(SAMPLE_FILE)
 else:
     st.info("Upload a CSV or Excel file, or check 'Use sample data'.")
     st.stop()
