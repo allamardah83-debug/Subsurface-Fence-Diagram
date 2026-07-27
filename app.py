@@ -64,7 +64,7 @@ with st.expander("Expected columns", expanded=False):
 left, right = st.columns([2, 1])
 with left:
     try:
-        fig, ax = plot_fence_diagram(
+        fig = plot_fence_diagram(
             plot_df,
             interval_width=interval_width,
             gap=gap,
