@@ -414,17 +414,7 @@ def plot_fence_diagram(
             water_points.append((x_center, float(water_elev)))
 
         ax.text(x_center, y_max + y_pad * 0.3, bh_id, ha="center", va="bottom", rotation=90, fontsize=10, fontweight="bold")
-        ax.text(n_x, y_max + y_pad * 0.12, "N",
-        ha="left", va="bottom",
-        fontsize=7, fontweight="bold")
-
-ax.text(recovery_x, y_max + y_pad * 0.12, "REC",
-        ha="left", va="bottom",
-        fontsize=7, fontweight="bold")
-
-ax.text(rqd_x, y_max + y_pad * 0.12, "RQD",
-        ha="left", va="bottom",
-        fontsize=7, fontweight="bold")
+        
        
 
         if pd.notna(ground_elev):
