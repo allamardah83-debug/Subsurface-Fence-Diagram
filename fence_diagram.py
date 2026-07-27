@@ -1,339 +1,638 @@
-import math
-from dataclasses import dataclass
+from __future__ import annotations
+
+import re
 from io import BytesIO
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
+
+import matplotlib
+
+matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch, Rectangle
 
 
-SOIL_STYLES: Dict[str, Dict[str, str]] = {
-    "asphalt": {"facecolor": "black", "hatch": None, "edgecolor": "black"},
-    "fill": {"facecolor": "#d9d9d9", "hatch": "xx", "edgecolor": "#777777"},
-    "topsoil": {"facecolor": "#c2b280", "hatch": "...", "edgecolor": "#6b5b3e"},
-    "water": {"facecolor": "none", "hatch": None, "edgecolor": "#1f77b4"},
-    "gp-gc": {"facecolor": "#f0e68c", "hatch": "oo", "edgecolor": "#8a7f2b"},
-    "gc": {"facecolor": "#e7d7c9", "hatch": "oo", "edgecolor": "#8f6f52"},
-    "gp": {"facecolor": "#f6e7c1", "hatch": "oo", "edgecolor": "#9a8351"},
-    "sp-sc": {"facecolor": "#e6e6e6", "hatch": "///", "edgecolor": "#888888"},
-    "sc": {"facecolor": "#f2f2f2", "hatch": "///", "edgecolor": "#888888"},
-    "sp": {"facecolor": "#f9f9f9", "hatch": "...", "edgecolor": "#888888"},
-    "cl": {"facecolor": "#d9c2a3", "hatch": "///", "edgecolor": "#7d674d"},
-    "ch": {"facecolor": "#c8a47e", "hatch": "///", "edgecolor": "#7d5d3a"},
-    "limestone": {"facecolor": "#d0d0d0", "hatch": "--", "edgecolor": "#6a6a6a"},
-    "rock": {"facecolor": "#bdbdbd", "hatch": "--", "edgecolor": "#6a6a6a"},
-    "void": {"facecolor": "white", "hatch": None, "edgecolor": "black"},
+STYLE_LIBRARY: Dict[str, Dict[str, str | None]] = {
+    "asphalt": {"facecolor": "#111111", "hatch": None, "edgecolor": "black", "label": "Asphalt"},
+    "fill": {"facecolor": "#d9d9d9", "hatch": "xx", "edgecolor": "#777777", "label": "Fill"},
+    "topsoil": {"facecolor": "#c2b280", "hatch": "...", "edgecolor": "#6b5b3e", "label": "Topsoil"},
+    "water": {"facecolor": "#eaf4ff", "hatch": None, "edgecolor": "#1f77b4", "label": "Water"},
+    "gp-gc": {"facecolor": "#f0e6c8", "hatch": "oo", "edgecolor": "#8a7f2b", "label": "GP-GC"},
+    "gc": {"facecolor": "#f0e6c8", "hatch": "oo", "edgecolor": "#8f6f52", "label": "GC"},
+    "gp": {"facecolor": "#f6e7c1", "hatch": "oo", "edgecolor": "#9a8351", "label": "GP"},
+    "sp-sc": {"facecolor": "#f9e6c0", "hatch": "///", "edgecolor": "#888888", "label": "SP-SC"},
+    "sc": {"facecolor": "#f2f2f2", "hatch": "///", "edgecolor": "#888888", "label": "SC"},
+    "sp": {"facecolor": "#f9f9c9", "hatch": "...", "edgecolor": "#888888", "label": "SP"},
+    "cl-ml": {"facecolor": "#c39bd3", "hatch": "|||/", "edgecolor": "#7d5d7d", "label": "CL-ML"},
+    "cl": {"facecolor": "#d9c2a3", "hatch": "///", "edgecolor": "#7d674d", "label": "CL"},
+    "ch": {"facecolor": "#c8a47e", "hatch": "///", "edgecolor": "#7d5d3a", "label": "CH"},
+    "ol": {"facecolor": "#b8a99a", "hatch": "..", "edgecolor": "#6f6259", "label": "OL"},
+    "limestone": {"facecolor": "#d0d0d0", "hatch": "--", "edgecolor": "#6a6a6a", "label": "Limestone"},
+    "rock": {"facecolor": "#bdbdbd", "hatch": "--", "edgecolor": "#6a6a6a", "label": "Rock"},
+    "void": {"facecolor": "white", "hatch": None, "edgecolor": "black", "label": "Void"},
 }
 
 
-def _normalize_text(value: object) -> str:
+def _normalize_text(value: Any) -> str:
     if pd.isna(value):
         return ""
-    return str(value).strip()
+    text = str(value).strip().lower()
+    text = re.sub(r"[^0-9a-zA-Z]+", "-", text)
+    return re.sub(r"-+", "-", text).strip("-")
 
 
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    cols = {c.lower().strip().replace(" ", "_").replace("-", "_"): c for c in df.columns}
+def _first_nonempty(row: pd.Series, keys: List[str]) -> str:
+    for key in keys:
+        if key in row.index and not pd.isna(row[key]) and str(row[key]).strip() != "":
+            return str(row[key]).strip()
+    return ""
 
-    def pick(*names: str) -> Optional[str]:
-        for n in names:
-            key = n.lower().strip().replace(" ", "_").replace("-", "_")
-            if key in cols:
-                return cols[key]
-        return None
 
-    renames = {}
-    mapping = {
-        "borehole_id": ["borehole_id", "boring", "borehole", "bh", "hole_id", "id"],
-        "ground_elev": ["ground_elev", "surface_elev", "surface_elevation", "elev_ground", "g_elev", "datum"],
-        "x": ["x", "east", "easting", "x_coord", "station_x"],
-        "y": ["y", "north", "northing", "y_coord", "station_y"],
-        "station": ["station", "chainage", "ch", "dist", "distance"],
-        "order": ["order", "borehole_order", "plot_order", "sequence"],
-        "top_depth": ["top_depth", "from_depth", "depth_from", "depth_top", "top"],
-        "bottom_depth": ["bottom_depth", "to_depth", "depth_to", "depth_bottom", "bottom"],
-        "top_elev": ["top_elev", "top_elevation", "from_elev", "elev_from"],
-        "bottom_elev": ["bottom_elev", "bottom_elevation", "to_elev", "elev_to"],
-        "unit": ["unit", "lithology", "soil", "material", "strata", "stratum", "description"],
-        "water_elev": ["water_elev", "gw_elev", "water_level_elev", "water_table", "wt_elev"],
-        "water_depth": ["water_depth", "gw_depth", "water_level_depth", "wt_depth"],
-        "n_value": ["n_value", "n", "blow_count", "spt_n"],
-        "rqd": ["rqd", "rock_quality_designation"],
-        "casing_depth": ["casing_depth", "case_depth"],
+def _canonicalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    rename_map: Dict[str, str] = {}
+    for col in df.columns:
+        normalized = _normalize_text(col).replace("-", "_")
+        rename_map[col] = normalized
+
+    df = df.rename(columns=rename_map)
+
+    aliases = {
+        "bh": "borehole_id",
+        "boring": "borehole_id",
+        "hole": "borehole_id",
+        "id": "borehole_id",
+        "bh_id": "borehole_id",
+        "boring_id": "borehole_id",
+        "station": "x",
+        "chainage": "x",
+        "stationing": "x",
+        "ground": "ground_elev",
+        "groundlevel": "ground_elev",
+        "ground_elevation": "ground_elev",
+        "surface_elev": "ground_elev",
+        "surface_elevation": "ground_elev",
+        "elevation": "ground_elev",
+        "top": "top_depth",
+        "from": "top_depth",
+        "start_depth": "top_depth",
+        "bottom": "bottom_depth",
+        "to": "bottom_depth",
+        "end_depth": "bottom_depth",
+        "uscs_classification": "uscs",
+        "uscs_group": "uscs",
+        "symbol": "uscs",
+        "soil": "uscs",
+        "material": "unit",
+        "lithology": "unit",
+        "lith": "unit",
+        "description": "description",
+        "desc": "description",
+        "blows": "n_value",
+        "n": "n_value",
+        "nvalue": "n_value",
+        "blow_count": "n_value",
+        "blowcounts": "n_value",
+        "water": "water_elev",
+        "waterlevel": "water_elev",
+        "water_level": "water_elev",
+        "wl": "water_elev",
+        "rqd_percent": "rqd",
+        "core_recovery": "recovery",
+        "recovery_percent": "recovery",
+        "rock": "rock_type",
+        "rocktype": "rock_type",
+        "remarks_note": "remarks",
     }
-    for canonical, names in mapping.items():
-        src = pick(*names)
-        if src is not None and src != canonical:
-            renames[src] = canonical
 
-    df = df.rename(columns=renames)
+    df = df.rename(columns={c: aliases.get(c, c) for c in df.columns})
     return df
 
 
-def read_table(file_obj) -> pd.DataFrame:
-    name = getattr(file_obj, "name", "").lower()
-    if name.endswith(".csv"):
-        df = pd.read_csv(file_obj)
-    elif name.endswith(".xlsx") or name.endswith(".xls"):
-        df = pd.read_excel(file_obj)
-    else:
-        raise ValueError("Unsupported file type. Upload CSV or Excel.")
-    return normalize_columns(df)
-
-
-def style_for_unit(unit: str) -> Dict[str, str]:
-    u = _normalize_text(unit).lower()
-    for key, style in SOIL_STYLES.items():
-        if key in u:
-            return style
-    # broad heuristics
-    if any(k in u for k in ["asphalt", "pavement"]):
-        return SOIL_STYLES["asphalt"]
-    if any(k in u for k in ["fill", "backfill", "ff"]):
-        return SOIL_STYLES["fill"]
-    if any(k in u for k in ["topsoil", "organic"]):
-        return SOIL_STYLES["topsoil"]
-    if any(k in u for k in ["limestone", "rock", "bedrock", "limerock"]):
-        return SOIL_STYLES["limestone"]
-    if any(k in u for k in ["clay", "cl"]):
-        return SOIL_STYLES["cl"]
-    if any(k in u for k in ["silty clay", "ch", "lean clay"]):
-        return SOIL_STYLES["ch"]
-    if any(k in u for k in ["sand", "sp"]):
-        return SOIL_STYLES["sp"]
-    return {"facecolor": "#f5f5f5", "hatch": None, "edgecolor": "#999999"}
-
-
-def safe_numeric(s):
-    return pd.to_numeric(s, errors="coerce")
+def _coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    numeric_cols = [
+        "x",
+        "y",
+        "ground_elev",
+        "top_depth",
+        "bottom_depth",
+        "top_elev",
+        "bottom_elev",
+        "n_value",
+        "water_elev",
+        "rqd",
+        "recovery",
+        "water_depth",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
 
 
 def intervals_to_elevation(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    if "top_elev" not in df.columns or "bottom_elev" not in df.columns:
-        if "ground_elev" not in df.columns:
-            raise ValueError("Need either top_elev/bottom_elev or ground_elev with depth columns.")
-        if "top_depth" not in df.columns or "bottom_depth" not in df.columns:
-            raise ValueError("Need depth columns top_depth and bottom_depth when elevations are not provided.")
-        df["top_elev"] = safe_numeric(df["ground_elev"]) - safe_numeric(df["top_depth"])
-        df["bottom_elev"] = safe_numeric(df["ground_elev"]) - safe_numeric(df["bottom_depth"])
-    df["top_elev"] = safe_numeric(df["top_elev"])
-    df["bottom_elev"] = safe_numeric(df["bottom_elev"])
+    df = _canonicalize_columns(df.copy())
+    df = _coerce_numeric_columns(df)
+
+    for col in [
+        "borehole_id",
+        "x",
+        "y",
+        "ground_elev",
+        "top_depth",
+        "bottom_depth",
+        "top_elev",
+        "bottom_elev",
+        "uscs",
+        "unit",
+        "description",
+        "n_value",
+        "water_elev",
+        "rqd",
+        "recovery",
+        "rock_type",
+        "formation",
+        "remarks",
+    ]:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    if "ground_elev" in df.columns and "top_depth" in df.columns and "top_elev" not in df.columns:
+        df["top_elev"] = df["ground_elev"] - df["top_depth"]
+
+    if "ground_elev" in df.columns and "bottom_depth" in df.columns and "bottom_elev" not in df.columns:
+        df["bottom_elev"] = df["ground_elev"] - df["bottom_depth"]
+
+    if "top_elev" in df.columns and "top_depth" in df.columns and df["ground_elev"].isna().any():
+        mask = df["ground_elev"].isna() & df["top_elev"].notna() & df["top_depth"].notna()
+        df.loc[mask, "ground_elev"] = df.loc[mask, "top_elev"] + df.loc[mask, "top_depth"]
+
+    if "bottom_elev" in df.columns and "bottom_depth" in df.columns and df["ground_elev"].isna().any():
+        mask = df["ground_elev"].isna() & df["bottom_elev"].notna() & df["bottom_depth"].notna()
+        df.loc[mask, "ground_elev"] = df.loc[mask, "bottom_elev"] + df.loc[mask, "bottom_depth"]
+
+    if "top_depth" not in df.columns and "ground_elev" in df.columns and "top_elev" in df.columns:
+        df["top_depth"] = df["ground_elev"] - df["top_elev"]
+
+    if "bottom_depth" not in df.columns and "ground_elev" in df.columns and "bottom_elev" in df.columns:
+        df["bottom_depth"] = df["ground_elev"] - df["bottom_elev"]
+
+    if "water_elev" not in df.columns:
+        df["water_elev"] = np.nan
+    if "water_depth" in df.columns:
+        mask = df["water_elev"].isna() & df["water_depth"].notna() & df["ground_elev"].notna()
+        df.loc[mask, "water_elev"] = df.loc[mask, "ground_elev"] - df.loc[mask, "water_depth"]
+
     return df
 
 
-def borehole_positions(df_bh: pd.DataFrame, section_mode: str = "auto") -> pd.DataFrame:
-    df = df_bh.copy()
-    if "station" in df.columns and df["station"].notna().any():
-        df["x_plot"] = safe_numeric(df["station"])
-    elif "order" in df.columns and df["order"].notna().any():
-        df["x_plot"] = safe_numeric(df["order"])
-    elif "x" in df.columns and df["x"].notna().any():
-        df = df.sort_values([c for c in ["x", "y"] if c in df.columns])
-        df["x_plot"] = np.arange(len(df))
+def read_table(uploaded) -> pd.DataFrame:
+    if uploaded is None:
+        raise ValueError("No file uploaded.")
+
+    filename = getattr(uploaded, "name", "") or ""
+    lower = filename.lower()
+
+    if lower.endswith(".csv"):
+        df = pd.read_csv(uploaded)
+    elif lower.endswith(".xls") or lower.endswith(".xlsx"):
+        df = pd.read_excel(uploaded)
     else:
-        df["x_plot"] = np.arange(len(df))
+        try:
+            df = pd.read_csv(uploaded)
+        except Exception:
+            df = pd.read_excel(uploaded)
+
+    df = intervals_to_elevation(df)
+
+    if "borehole_id" not in df.columns or df["borehole_id"].isna().all():
+        raise ValueError("The uploaded file must contain a 'borehole_id' column.")
+
     return df
 
 
-def build_borehole_table(df: pd.DataFrame) -> pd.DataFrame:
-    required = ["borehole_id"]
-    for c in required:
-        if c not in df.columns:
-            raise ValueError(f"Missing required column: {c}")
-    if "ground_elev" not in df.columns and not ({"top_elev", "bottom_elev"} <= set(df.columns)):
-        raise ValueError("Need ground_elev or interval elevations.")
+def _style_key_from_row(row: pd.Series) -> str:
+    candidates = [
+        _first_nonempty(row, ["uscs"]),
+        _first_nonempty(row, ["unit"]),
+        _first_nonempty(row, ["rock_type"]),
+        _first_nonempty(row, ["formation"]),
+        _first_nonempty(row, ["description"]),
+        _first_nonempty(row, ["remarks"]),
+    ]
 
-    df = df.copy()
-    for c in ["ground_elev", "top_depth", "bottom_depth", "top_elev", "bottom_elev", "water_elev", "water_depth", "n_value", "rqd", "order", "station", "x", "y"]:
-        if c in df.columns:
-            df[c] = safe_numeric(df[c])
-    return df
+    text = _normalize_text(" ".join(candidates))
+
+    if not text:
+        return "void"
+
+    checks = [
+        ("sp-sc", ["sp-sc", "sc-sp"]),
+        ("cl-ml", ["cl-ml", "ml-cl"]),
+        ("gp-gc", ["gp-gc", "gc-gp"]),
+        ("asphalt", ["asphalt"]),
+        ("topsoil", ["topsoil"]),
+        ("fill", ["fill", "engineered-fill"]),
+        ("water", ["water", "wl"]),
+        ("limestone", ["limestone", "lms", "bedrock"]),
+        ("rock", ["rock", "ref", "core"]),
+        ("ch", ["ch"]),
+        ("cl", ["cl"]),
+        ("ol", ["ol"]),
+        ("sc", ["sc"]),
+        ("sp", ["sp"]),
+        ("gc", ["gc"]),
+        ("gp", ["gp"]),
+    ]
+
+    for key, needles in checks:
+        if any(needle in text for needle in needles):
+            return key
+
+    return "void"
+
+
+def _style_for_row(row: pd.Series) -> Tuple[str, Dict[str, str | None]]:
+    key = _style_key_from_row(row)
+    style = STYLE_LIBRARY.get(key, STYLE_LIBRARY["void"]).copy()
+    return key, style
+
+
+def _material_label(row: pd.Series) -> str:
+    label = _first_nonempty(row, ["uscs", "unit", "rock_type", "formation"])
+    if not label:
+        label = _first_nonempty(row, ["description"])
+    return label
+
+
+def _first_valid(series: pd.Series):
+    for value in series.tolist():
+        if pd.notna(value):
+            return value
+    return np.nan
+
+
+def _prepare_borehole_summary(df: pd.DataFrame) -> pd.DataFrame:
+    cols = [c for c in ["borehole_id", "x", "y", "ground_elev", "water_elev"] if c in df.columns]
+    summary = (
+        df.groupby("borehole_id", as_index=False)[cols[1:]]
+        .agg(_first_valid)
+        if len(cols) > 1
+        else df[["borehole_id"]].drop_duplicates().copy()
+    )
+
+    if "x" not in summary.columns:
+        summary["x"] = np.nan
+    if "y" not in summary.columns:
+        summary["y"] = np.nan
+    if "ground_elev" not in summary.columns:
+        summary["ground_elev"] = np.nan
+    if "water_elev" not in summary.columns:
+        summary["water_elev"] = np.nan
+
+    return summary
+
+
+def _compute_positions(summary: pd.DataFrame, gap: float) -> Tuple[pd.DataFrame, np.ndarray]:
+    summary = summary.copy()
+
+    if "x" in summary.columns and summary["x"].notna().any():
+        summary = summary.sort_values(["x", "borehole_id"], kind="mergesort").reset_index(drop=True)
+        xs = pd.to_numeric(summary["x"], errors="coerce").to_numpy(dtype=float)
+
+        valid = xs[np.isfinite(xs)]
+        if len(valid) > 1:
+            unique_sorted = np.sort(np.unique(valid))
+            diffs = np.diff(unique_sorted)
+            diffs = diffs[diffs > 0]
+            ref = float(np.median(diffs)) if len(diffs) else 1.0
+        else:
+            ref = 1.0
+
+        if not np.isfinite(ref) or ref <= 0:
+            ref = 1.0
+
+        positions = (xs - np.nanmin(xs)) / ref * gap
+        return summary, positions
+
+    summary = summary.sort_values("borehole_id").reset_index(drop=True)
+    positions = np.arange(len(summary), dtype=float) * gap
+    return summary, positions
 
 
 def plot_fence_diagram(
-    data: pd.DataFrame,
+    df: pd.DataFrame,
     interval_width: float = 0.75,
     gap: float = 1.25,
-    title: str = "Subsurface Fence Diagram",
-    show_legend: bool = True,
     annotate_n: bool = True,
-) -> Tuple[plt.Figure, plt.Axes]:
-    data = build_borehole_table(data)
-    data = intervals_to_elevation(data)
+    show_legend: bool = True,
+    title: str = "Subsurface Fence Diagram",
+):
+    df = intervals_to_elevation(df)
 
-    boreholes = (
-        data[[c for c in ["borehole_id", "ground_elev", "water_elev", "water_depth", "x", "y", "station", "order"] if c in data.columns]]
-        .drop_duplicates(subset=["borehole_id"])
-        .copy()
-    )
-    boreholes = boreholes.sort_values(by=[c for c in ["order", "station", "x_plot", "x"] if c in boreholes.columns], na_position="last")
-    if "x_plot" not in boreholes.columns:
-        boreholes = borehole_positions(boreholes)
+    if df.empty:
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.set_axis_off()
+        ax.text(0.5, 0.5, "No data available.", ha="center", va="center", fontsize=14)
+        return fig
+
+    if "borehole_id" not in df.columns:
+        raise ValueError("Input table must contain a 'borehole_id' column.")
+
+    summary = _prepare_borehole_summary(df)
+    summary, positions = _compute_positions(summary, gap=gap)
+
+    borehole_ids = summary["borehole_id"].astype(str).tolist()
+
+    all_elevations = pd.concat(
+        [
+            pd.to_numeric(df.get("ground_elev"), errors="coerce"),
+            pd.to_numeric(df.get("top_elev"), errors="coerce"),
+            pd.to_numeric(df.get("bottom_elev"), errors="coerce"),
+            pd.to_numeric(df.get("water_elev"), errors="coerce"),
+        ],
+        axis=0,
+        ignore_index=True,
+    ).dropna()
+
+    if len(all_elevations):
+        y_max = float(all_elevations.max())
+        y_min = float(all_elevations.min())
     else:
-        boreholes = boreholes.sort_values("x_plot")
+        y_max = 100.0
+        y_min = 0.0
 
-    # Build x positions with equal gaps but retain order.
-    boreholes = boreholes.reset_index(drop=True)
-    boreholes["x_plot"] = np.arange(len(boreholes)) * gap
-    xmap = dict(zip(boreholes["borehole_id"], boreholes["x_plot"]))
+    y_pad = max(5.0, (y_max - y_min) * 0.10 if y_max > y_min else 5.0)
 
-    fig, ax = plt.subplots(figsize=(max(12, len(boreholes) * 1.7), 8.5), constrained_layout=True)
-    fig.patch.set_facecolor("white")
+    fig_width = max(12.0, 1.4 * len(summary) + 4.0)
+    fig, ax = plt.subplots(figsize=(fig_width, 8.5))
 
-    ymin = float(np.nanmin(data["bottom_elev"]))
-    ymax_candidates = [float(np.nanmax(data["top_elev"]))]
-    if "ground_elev" in data.columns and data["ground_elev"].notna().any():
-        ymax_candidates.append(float(np.nanmax(data["ground_elev"])))
-    if "water_elev" in data.columns and data["water_elev"].notna().any():
-        ymax_candidates.append(float(np.nanmax(data["water_elev"])))
-    ymax = max(ymax_candidates)
-    pad = max(4.0, 0.05 * (ymax - ymin if ymax > ymin else 10))
+    used_style_keys: List[str] = []
+    ground_points: List[Tuple[float, float]] = []
+    water_points: List[Tuple[float, float]] = []
 
-    # Plot each borehole intervals.
-    unit_seen = []
-    for bh in boreholes["borehole_id"]:
-        bx = xmap[bh]
-        intervals = data[data["borehole_id"] == bh].sort_values(["top_elev", "bottom_elev"], ascending=[False, False])
-        if intervals.empty:
-            continue
-        bh_meta = boreholes[boreholes["borehole_id"] == bh].iloc[0]
+    for idx, bh in summary.iterrows():
+        bh_id = str(bh["borehole_id"])
+        x_center = float(positions[idx])
 
-        # Ground line / casing cap.
-        ground_elev = intervals["top_elev"].max() if "ground_elev" not in intervals.columns or intervals["ground_elev"].isna().all() else float(bh_meta.get("ground_elev", np.nan))
-        if math.isnan(ground_elev):
-            ground_elev = float(intervals["top_elev"].max())
+        bh_rows = df[df["borehole_id"].astype(str) == bh_id].copy()
+        bh_rows = bh_rows.sort_values(["top_elev", "bottom_elev"], ascending=[False, False])
 
-        # Borehole panel outline.
-        ax.add_patch(Rectangle((bx - interval_width / 2, ymin - pad), interval_width, (ymax + pad) - (ymin - pad), fill=False, linewidth=0.8, edgecolor="#c7c7c7", zorder=0))
+        ground_elev = pd.to_numeric(bh.get("ground_elev"), errors="coerce")
+        water_elev = pd.to_numeric(bh.get("water_elev"), errors="coerce")
 
-        for _, row in intervals.iterrows():
-            top = float(row["top_elev"])
-            bot = float(row["bottom_elev"])
-            unit = _normalize_text(row.get("unit", ""))
-            style = style_for_unit(unit)
-            if unit and unit.lower() not in unit_seen:
-                unit_seen.append(unit.lower())
-            rect = Rectangle(
-                (bx - interval_width / 2, bot),
+        if pd.notna(ground_elev):
+            ground_points.append((x_center, float(ground_elev)))
+
+        if pd.notna(water_elev):
+            water_points.append((x_center, float(water_elev)))
+
+        # Borehole label
+        ax.text(
+            x_center,
+            y_max + y_pad * 0.25,
+            bh_id,
+            ha="center",
+            va="bottom",
+            rotation=90,
+            fontsize=9,
+            fontweight="bold",
+        )
+
+        # Depth/elevation intervals
+        for _, row in bh_rows.iterrows():
+            top = pd.to_numeric(row.get("top_elev"), errors="coerce")
+            bottom = pd.to_numeric(row.get("bottom_elev"), errors="coerce")
+
+            if pd.isna(top) or pd.isna(bottom):
+                continue
+
+            if bottom > top:
+                top, bottom = bottom, top
+
+            thickness = float(top - bottom)
+            if thickness <= 0:
+                continue
+
+            key, style = _style_for_row(row)
+            used_style_keys.append(key)
+
+            patch = Rectangle(
+                (x_center - interval_width / 2.0, bottom),
                 interval_width,
-                top - bot,
+                thickness,
                 facecolor=style["facecolor"],
                 edgecolor=style["edgecolor"],
                 hatch=style["hatch"],
                 linewidth=0.8,
                 zorder=2,
             )
-            ax.add_patch(rect)
+            ax.add_patch(patch)
 
-            # Interval boundary lines.
-            ax.plot([bx - interval_width / 2, bx + interval_width / 2], [top, top], color="#666666", linewidth=0.5, zorder=3)
-            ax.plot([bx - interval_width / 2, bx + interval_width / 2], [bot, bot], color="#666666", linewidth=0.5, zorder=3)
+            mid_y = (top + bottom) / 2.0
+            label = _material_label(row)
+            if label:
+                ax.text(
+                    x_center - interval_width / 2.0 + 0.03,
+                    mid_y,
+                    label,
+                    ha="left",
+                    va="center",
+                    fontsize=7.5,
+                    zorder=3,
+                )
 
-            if annotate_n and "n_value" in row and pd.notna(row.get("n_value")):
-                ax.text(bx + interval_width * 0.62, (top + bot) / 2, f"N={int(row['n_value']) if float(row['n_value']).is_integer() else row['n_value']}", va="center", ha="left", fontsize=8, color="#2c2c2c")
+            notes: List[str] = []
+            if annotate_n:
+                n_value = row.get("n_value")
+                if pd.notna(n_value):
+                    try:
+                        notes.append(f"N={int(round(float(n_value)))}")
+                    except Exception:
+                        notes.append(f"N={n_value}")
 
-        # Ground line at top of borehole intervals.
-        top_y = float(intervals["top_elev"].max())
-        ax.plot([bx - interval_width / 2, bx + interval_width / 2], [top_y, top_y], color="black", linewidth=2.0, zorder=4)
+                recovery = row.get("recovery")
+                if pd.notna(recovery):
+                    try:
+                        notes.append(f"Rec={float(recovery):g}%")
+                    except Exception:
+                        notes.append(f"Rec={recovery}%")
 
-        # Water level.
-        water_y = np.nan
-        if "water_elev" in bh_meta and pd.notna(bh_meta["water_elev"]):
-            water_y = float(bh_meta["water_elev"])
-        elif "water_depth" in bh_meta and pd.notna(bh_meta["water_depth"]) and pd.notna(bh_meta.get("ground_elev", np.nan)):
-            water_y = float(bh_meta["ground_elev"] - bh_meta["water_depth"])
-        if not math.isnan(water_y):
-            ax.hlines(water_y, bx - interval_width / 2, bx + interval_width / 2, colors="#1f77b4", linestyles="--", linewidth=1.1, zorder=5)
-            ax.text(bx, water_y + 0.6, "WL", ha="center", va="bottom", fontsize=8, color="#1f77b4")
+                rqd = row.get("rqd")
+                if pd.notna(rqd):
+                    try:
+                        notes.append(f"RQD={float(rqd):g}%")
+                    except Exception:
+                        notes.append(f"RQD={rqd}%")
 
-        # Borehole label.
-        ax.text(bx, ymax + pad * 0.35, str(bh), ha="center", va="bottom", fontsize=10, fontweight="bold", rotation=90)
-        if pd.notna(bh_meta.get("x", np.nan)) and pd.notna(bh_meta.get("y", np.nan)):
-            ax.text(bx, ymax + pad * 0.12, f"({bh_meta['x']:.1f}, {bh_meta['y']:.1f})", ha="center", va="bottom", fontsize=7, color="#555555")
+            if notes:
+                ax.text(
+                    x_center + interval_width / 2.0 + 0.07,
+                    mid_y,
+                    "\n".join(notes),
+                    ha="left",
+                    va="center",
+                    fontsize=7.25,
+                    zorder=3,
+                )
 
-        # Elevation ticks on left of each borehole.
-        for ytick in np.arange(np.floor((top_y - 15) / 10) * 10, np.ceil((top_y + 5) / 10) * 10 + 1, 10):
-            if ymin - pad <= ytick <= ymax + pad:
-                ax.text(bx - interval_width * 0.68, ytick, f"{ytick:.0f}", ha="right", va="center", fontsize=7, color="#666666")
+        # Borehole water line
+        if pd.notna(water_elev):
+            ax.hlines(
+                float(water_elev),
+                x_center - interval_width / 2.0,
+                x_center + interval_width / 2.0,
+                colors="#1f77b4",
+                linestyles="--",
+                linewidth=1.2,
+                zorder=4,
+            )
+            ax.text(
+                x_center + interval_width / 2.0 + 0.04,
+                float(water_elev),
+                "WL",
+                color="#1f77b4",
+                fontsize=7,
+                va="center",
+                ha="left",
+                zorder=4,
+            )
 
-    # Connect ground line between boreholes.
-    ground_pts_x = []
-    ground_pts_y = []
-    for bh in boreholes["borehole_id"]:
-        bx = xmap[bh]
-        top_y = float(data.loc[data["borehole_id"] == bh, "top_elev"].max())
-        ground_pts_x.append(bx)
-        ground_pts_y.append(top_y)
-    ax.plot(ground_pts_x, ground_pts_y, color="#444444", linewidth=1.4, linestyle="-", zorder=4)
+        # Ground line above each borehole
+        if pd.notna(ground_elev):
+            ax.hlines(
+                float(ground_elev),
+                x_center - interval_width / 2.0,
+                x_center + interval_width / 2.0,
+                colors="black",
+                linewidth=1.2,
+                zorder=4,
+            )
 
-    # Axes formatting.
-    ax.set_title(title, fontsize=16, fontweight="bold", pad=18)
-    ax.set_xlim(-gap * 0.7, (len(boreholes) - 1) * gap + gap * 0.7)
-    ax.set_ylim(ymin - pad, ymax + pad)
-    ax.invert_yaxis()  # higher elevations at top
-    ax.set_xticks([])
-    ax.set_ylabel("Elevation")
-    ax.grid(axis="y", color="#d9d9d9", linestyle="--", linewidth=0.6)
+    # Connect ground surface and water table across boreholes
+    if len(ground_points) >= 2:
+        ground_points = sorted(ground_points, key=lambda t: t[0])
+        ax.plot(
+            [p[0] for p in ground_points],
+            [p[1] for p in ground_points],
+            color="black",
+            linewidth=1.6,
+            marker="o",
+            markersize=2.5,
+            zorder=5,
+        )
 
-    # Legend from visible units.
-    if show_legend:
-        unique_units = []
-        for u in data["unit"].fillna(""):
-            u = str(u).strip()
-            if not u:
-                continue
-            if u.lower() not in [x.lower() for x in unique_units]:
-                unique_units.append(u)
-        handles = []
-        labels = []
-        for unit in unique_units[:12]:
-            style = style_for_unit(unit)
-            handles.append(Rectangle((0, 0), 1, 1, facecolor=style["facecolor"], edgecolor=style["edgecolor"], hatch=style["hatch"], linewidth=0.8))
-            labels.append(unit)
+    if len(water_points) >= 2:
+        water_points = sorted(water_points, key=lambda t: t[0])
+        ax.plot(
+            [p[0] for p in water_points],
+            [p[1] for p in water_points],
+            color="#1f77b4",
+            linewidth=1.2,
+            linestyle="--",
+            marker="o",
+            markersize=2.5,
+            zorder=5,
+        )
+
+    # Axes, labels, and layout
+    ax.set_title(title, fontsize=15, fontweight="bold", pad=16)
+    ax.set_ylabel("Elevation", fontsize=11)
+
+    ax.set_xlim(float(positions.min()) - interval_width * 1.6, float(positions.max()) + interval_width * 1.8)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(borehole_ids, rotation=0, fontsize=9)
+    ax.grid(axis="y", linestyle=":", alpha=0.35)
+    ax.set_axisbelow(True)
+
+    for spine in ["top", "right"]:
+        ax.spines[spine].set_visible(False)
+
+    if show_legend and used_style_keys:
+        ordered_keys: List[str] = []
+        for key in used_style_keys:
+            if key not in ordered_keys and key in STYLE_LIBRARY:
+                ordered_keys.append(key)
+
+        handles: List[Any] = []
+        for key in ordered_keys:
+            style = STYLE_LIBRARY[key]
+            handles.append(
+                Patch(
+                    facecolor=style["facecolor"],
+                    edgecolor=style["edgecolor"],
+                    hatch=style["hatch"],
+                    label=style["label"],
+                )
+            )
+
+        if len(water_points) >= 1:
+            handles.append(
+                Line2D(
+                    [0],
+                    [0],
+                    color="#1f77b4",
+                    linestyle="--",
+                    linewidth=1.2,
+                    label="Water level",
+                )
+            )
+
         if handles:
-            ax.legend(handles, labels, title="Units", loc="lower right", frameon=True, fontsize=8, title_fontsize=9)
+            ax.legend(
+                handles=handles,
+                title="Legend",
+                loc="upper left",
+                bbox_to_anchor=(1.01, 1.0),
+                frameon=True,
+            )
 
-    return fig, ax
+    fig.tight_layout()
+    return fig
 
 
-def fig_to_png_bytes(fig: plt.Figure, dpi: int = 200) -> bytes:
-    buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return buf.getvalue()
+def fig_to_png_bytes(fig) -> bytes:
+    buffer = BytesIO()
+    fig.savefig(buffer, format="png", dpi=220, bbox_inches="tight")
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
-SAMPLE_DATA = pd.DataFrame(
-    [
-        ["B-1", 888.9, 100, 200, 0, 1.2, 5.0, "Asphalt", np.nan, 12],
-        ["B-1", 888.9, 100, 200, 1.2, 5.0, 8.0, "Fill", np.nan, 8],
-        ["B-1", 888.9, 100, 200, 5.0, 13.0, 25.0, "SP-SC", 883.2, 11],
-        ["B-1", 888.9, 100, 200, 13.0, 25.0, 38.0, "SP", np.nan, 14],
-        ["B-1", 888.9, 100, 200, 25.0, 43.0, 47.0, "GC", np.nan, 11],
-        ["B-1", 888.9, 100, 200, 43.0, 58.0, 65.0, "GP-GC", np.nan, 10],
-        ["B-1", 888.9, 100, 200, 58.0, 95.0, 95.0, "Limestone", np.nan, np.nan],
-        ["B-2", 889.1, 220, 200, 0, 0.8, 10.0, "Asphalt", np.nan, 10],
-        ["B-2", 889.1, 220, 200, 0.8, 10.0, 8.0, "Fill", np.nan, 7],
-        ["B-2", 889.1, 220, 200, 10.0, 28.0, 50.0, "SP-SC", 884.8, 24],
-        ["B-2", 889.1, 220, 200, 28.0, 38.0, 41.0, "GC", np.nan, 13],
-        ["B-2", 889.1, 220, 200, 38.0, 65.0, 24.0, "Limestone", np.nan, np.nan],
-        ["B-3", 887.8, 340, 200, 0, 1.0, 7.0, "Fill", np.nan, 7],
-        ["B-3", 887.8, 340, 200, 1.0, 8.0, 9.0, "SP", np.nan, 9],
-        ["B-3", 887.8, 340, 200, 8.0, 12.0, 5.0, "SC", np.nan, 5],
-        ["B-3", 887.8, 340, 200, 12.0, 32.0, 13.0, "GC", np.nan, 13],
-        ["B-3", 887.8, 340, 200, 32.0, 40.0, 13.0, "Fill", np.nan, 13],
-        ["B-3", 887.8, 340, 200, 40.0, 70.0, 20.0, "RC", np.nan, np.nan],
-        ["B-4", 889.4, 460, 200, 0, 22.0, 40.0, "Void", np.nan, np.nan],
-        ["B-4", 889.4, 460, 200, 22.0, 28.5, 40.0, "GP-GC", 866.8, 40],
-        ["B-4", 889.4, 460, 200, 28.5, 65.5, 40.0, "Limestone", np.nan, np.nan],
-    ],
-    columns=["borehole_id", "ground_elev", "x", "y", "top_depth", "bottom_depth", "n_value", "unit", "water_elev", "rqd"],
+SAMPLE_DATA = intervals_to_elevation(
+    pd.DataFrame(
+        [
+            {"borehole_id": "B-1", "ground_elev": 888.9, "x": 100, "y": 200, "top_depth": 0.0, "bottom_depth": 1.2, "n_value": 5, "unit": "Asphalt", "recovery": 100, "rqd": np.nan, "water_elev": np.nan},
+            {"borehole_id": "B-1", "ground_elev": 888.9, "x": 100, "y": 200, "top_depth": 1.2, "bottom_depth": 5.0, "n_value": 8, "unit": "Fill", "recovery": 95, "rqd": np.nan, "water_elev": np.nan},
+            {"borehole_id": "B-1", "ground_elev": 888.9, "x": 100, "y": 200, "top_depth": 5.0, "bottom_depth": 13.0, "n_value": 25, "unit": "SP-SC", "recovery": 90, "rqd": 11, "water_elev": 883.2},
+            {"borehole_id": "B-1", "ground_elev": 888.9, "x": 100, "y": 200, "top_depth": 13.0, "bottom_depth": 25.0, "n_value": 38, "unit": "SP", "recovery": 92, "rqd": 14, "water_elev": np.nan},
+            {"borehole_id": "B-1", "ground_elev": 888.9, "x": 100, "y": 200, "top_depth": 25.0, "bottom_depth": 43.0, "n_value": 47, "unit": "GC", "recovery": 88, "rqd": 11, "water_elev": np.nan},
+            {"borehole_id": "B-1", "ground_elev": 888.9, "x": 100, "y": 200, "top_depth": 43.0, "bottom_depth": 58.0, "n_value": 65, "unit": "GP-GC", "recovery": 85, "rqd": 10, "water_elev": np.nan},
+            {"borehole_id": "B-1", "ground_elev": 888.9, "x": 100, "y": 200, "top_depth": 58.0, "bottom_depth": 95.0, "n_value": 95, "unit": "Limestone", "recovery": 98, "rqd": np.nan, "water_elev": np.nan},
+            {"borehole_id": "B-2", "ground_elev": 889.1, "x": 220, "y": 200, "top_depth": 0.0, "bottom_depth": 0.8, "n_value": 10, "unit": "Asphalt", "recovery": 100, "rqd": 10, "water_elev": np.nan},
+            {"borehole_id": "B-2", "ground_elev": 889.1, "x": 220, "y": 200, "top_depth": 0.8, "bottom_depth": 10.0, "n_value": 8, "unit": "Fill", "recovery": 95, "rqd": 7, "water_elev": np.nan},
+            {"borehole_id": "B-2", "ground_elev": 889.1, "x": 220, "y": 200, "top_depth": 10.0, "bottom_depth": 28.0, "n_value": 50, "unit": "SP-SC", "recovery": 90, "rqd": 24, "water_elev": 884.8},
+            {"borehole_id": "B-2", "ground_elev": 889.1, "x": 220, "y": 200, "top_depth": 28.0, "bottom_depth": 38.0, "n_value": 41, "unit": "GC", "recovery": 88, "rqd": 13, "water_elev": np.nan},
+            {"borehole_id": "B-2", "ground_elev": 889.1, "x": 220, "y": 200, "top_depth": 38.0, "bottom_depth": 65.0, "n_value": 24, "unit": "Limestone", "recovery": 97, "rqd": np.nan, "water_elev": np.nan},
+            {"borehole_id": "B-3", "ground_elev": 887.8, "x": 340, "y": 200, "top_depth": 0.0, "bottom_depth": 1.0, "n_value": 7, "unit": "Fill", "recovery": 100, "rqd": 7, "water_elev": np.nan},
+            {"borehole_id": "B-3", "ground_elev": 887.8, "x": 340, "y": 200, "top_depth": 1.0, "bottom_depth": 8.0, "n_value": 9, "unit": "SP", "recovery": 93, "rqd": 9, "water_elev": np.nan},
+            {"borehole_id": "B-3", "ground_elev": 887.8, "x": 340, "y": 200, "top_depth": 8.0, "bottom_depth": 12.0, "n_value": 5, "unit": "SC", "recovery": 91, "rqd": 5, "water_elev": np.nan},
+            {"borehole_id": "B-3", "ground_elev": 887.8, "x": 340, "y": 200, "top_depth": 12.0, "bottom_depth": 32.0, "n_value": 13, "unit": "GC", "recovery": 85, "rqd": 13, "water_elev": np.nan},
+            {"borehole_id": "B-4", "ground_elev": 889.4, "x": 460, "y": 200, "top_depth": 0.0, "bottom_depth": 22.0, "n_value": 40, "unit": "Void", "recovery": np.nan, "rqd": np.nan, "water_elev": np.nan},
+            {"borehole_id": "B-4", "ground_elev": 889.4, "x": 460, "y": 200, "top_depth": 22.0, "bottom_depth": 28.5, "n_value": 40, "unit": "GP-GC", "recovery": 88, "rqd": 40, "water_elev": 886.8},
+            {"borehole_id": "B-4", "ground_elev": 889.4, "x": 460, "y": 200, "top_depth": 28.5, "bottom_depth": 65.5, "n_value": 40, "unit": "Limestone", "recovery": 100, "rqd": np.nan, "water_elev": np.nan},
+        ]
+    )
 )
-SAMPLE_DATA["top_elev"] = SAMPLE_DATA["ground_elev"] - SAMPLE_DATA["top_depth"]
-SAMPLE_DATA["bottom_elev"] = SAMPLE_DATA["ground_elev"] - SAMPLE_DATA["bottom_depth"]
+
+
+__all__ = [
+    "SAMPLE_DATA",
+    "fig_to_png_bytes",
+    "intervals_to_elevation",
+    "plot_fence_diagram",
+    "read_table",
+]
