@@ -396,6 +396,13 @@ def plot_fence_diagram(
     for idx, bh in summary.iterrows():
         bh_id = str(bh["borehole_id"])
         x_center = float(positions[idx])
+                # Track positions
+        lith_left = x_center - interval_width / 2.0
+        lith_right = x_center + interval_width / 2.0
+
+        n_x = lith_right + 0.08
+        recovery_x = lith_right + 0.22
+        rqd_x = lith_right + 0.36
         bh_rows = df[df["borehole_id"].astype(str) == bh_id].copy()
         bh_rows = bh_rows.sort_values(["top_elev", "bottom_elev"], ascending=[False, False])
 
@@ -407,9 +414,17 @@ def plot_fence_diagram(
             water_points.append((x_center, float(water_elev)))
 
         ax.text(x_center, y_max + y_pad * 0.3, bh_id, ha="center", va="bottom", rotation=90, fontsize=10, fontweight="bold")
+       
 
         if pd.notna(ground_elev):
-            ax.hlines(float(ground_elev), x_center - interval_width / 2.0, x_center + interval_width / 2.0, colors="black", linewidth=1.1, zorder=4)
+           ax.hlines(
+    float(ground_elev),
+    lith_left,
+    lith_right,
+    colors="black",
+    linewidth=1.1,
+    zorder=4,
+)
 
         for _, row in bh_rows.iterrows():
             interval = _interval_top_bottom(row)
@@ -421,8 +436,8 @@ def plot_fence_diagram(
                 continue
             key, style = _style_for_row(row)
             patch = Rectangle(
-                (x_center - interval_width / 2.0, bottom),
-                interval_width,
+    (lith_left, bottom),
+    lith_right - lith_left,
                 thickness,
                 facecolor=style["facecolor"],
                 edgecolor=style["edgecolor"],
@@ -435,7 +450,7 @@ def plot_fence_diagram(
             label = _material_label(row)
             mid_y = (top + bottom) / 2.0
             if label:
-                ax.text(x_center - interval_width / 2.0 + 0.03, mid_y, label, ha="left", va="center", fontsize=7.25, zorder=3)
+                ax.text(lith_left + 0.03, mid_y, label, ha="left", va="center", fontsize=7.25, zorder=3)
 
                    # Fixed value tracks to the right of the lithology box.
         n_x = x_center + interval_width / 2.0 + 0.06
