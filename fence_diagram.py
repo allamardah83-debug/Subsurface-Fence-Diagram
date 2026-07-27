@@ -437,28 +437,35 @@ def plot_fence_diagram(
             if label:
                 ax.text(x_center - interval_width / 2.0 + 0.03, mid_y, label, ha="left", va="center", fontsize=7.25, zorder=3)
 
-            side_notes: List[str] = []
-            if annotate_n:
-                n_value = row.get("n_value")
-                if pd.notna(n_value):
-                    try:
-                        side_notes.append(str(int(round(float(n_value)))))
-                    except Exception:
-                        side_notes.append(str(n_value))
-                recovery = row.get("recovery")
-                if pd.notna(recovery):
-                    try:
-                        side_notes.append(f"{float(recovery):g}")
-                    except Exception:
-                        side_notes.append(str(recovery))
-                rqd = row.get("rqd")
-                if pd.notna(rqd):
-                    try:
-                        side_notes.append(f"{float(rqd):g}")
-                    except Exception:
-                        side_notes.append(str(rqd))
-            if side_notes:
-                ax.text(x_center + interval_width / 2.0 + 0.05, mid_y, "\n".join(side_notes), ha="left", va="center", fontsize=7.0, zorder=3)
+                   # Fixed value tracks to the right of the lithology box.
+        n_x = x_center + interval_width / 2.0 + 0.06
+        recovery_x = x_center + interval_width / 2.0 + 0.22
+        rqd_x = x_center + interval_width / 2.0 + 0.38
+
+        if annotate_n:
+            n_value = row.get("n_value")
+            if pd.notna(n_value):
+                try:
+                    n_text = str(int(round(float(n_value))))
+                except Exception:
+                    n_text = str(n_value)
+                ax.text(n_x, mid_y, n_text, ha="left", va="center", fontsize=7.0, zorder=3)
+
+            recovery = row.get("recovery")
+            if pd.notna(recovery):
+                try:
+                    recovery_text = f"{float(recovery):g}"
+                except Exception:
+                    recovery_text = str(recovery)
+                ax.text(recovery_x, mid_y, recovery_text, ha="left", va="center", fontsize=7.0, zorder=3)
+
+            rqd = row.get("rqd")
+            if pd.notna(rqd):
+                try:
+                    rqd_text = f"{float(rqd):g}"
+                except Exception:
+                    rqd_text = str(rqd)
+                ax.text(rqd_x, mid_y, rqd_text, ha="left", va="center", fontsize=7.0, zorder=3)
 
             # Light depth/elevation ticks on the left of each boring.
             ax.text(x_center - interval_width / 2.0 - 0.03, top, f"{top:.1f}", ha="right", va="center", fontsize=7.5)
